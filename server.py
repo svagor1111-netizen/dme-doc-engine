@@ -29,7 +29,7 @@ def create_docs(req: Request):
     doc.save(path)
 
     return {
-        "vn_docx_url": f"/files/{filename}"
+    "vn_docx_url": f"https://dme-doc-engine.onrender.com/files/{filename}"
     }
 
 @app.get("/files/{filename}")
