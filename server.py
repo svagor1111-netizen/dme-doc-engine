@@ -128,20 +128,49 @@ def default_secondary_dx(payload: Payload) -> str:
     return ""
 
 
-def get_equipment_detail(payload: Payload, index: int):
-    if payload.equipment_details and len(payload.equipment_details) > index:
-        return payload.equipment_details[index]
-    return None
+def build_vn_equipment_fields(payload: Payload) -> dict:
+    fields = [""] * 8
+
+    equipment_details = payload.equipment_details or []
+    equipment_list = payload.equipment_list or []
+    all_icd = ", ".join([d.code for d in payload.diagnoses]) if payload.diagnoses else ""
+
+    for i in range(min(8, max(len(equipment_details), len(equipment_list)))):
+        if i < len(equipment_details):
+            item = equipment_details[i]
+            name = item.name or ""
+            dx = item.dx or all_icd
+            medical_necessity = item.medical_necessity or ""
+        else:
+            name = equipment_list[i] if i < len(equipment_list) else ""
+            dx = all_icd
+            medical_necessity = ""
+
+        if name:
+            fields[i] = (
+                f"{i + 1}. {name}\n"
+                f"Relevant Dx/ICD-10: {dx}\n"
+                f"Medical Necessity: {medical_necessity}"
+            )
+
+    return {
+        "equipment_1": fields[0],
+        "equipment_2": fields[1],
+        "equipment_3": fields[2],
+        "equipment_4": fields[3],
+        "equipment_5": fields[4],
+        "equipment_6": fields[5],
+        "equipment_7": fields[6],
+        "equipment_8": fields[7],
+    }
 
 
 def build_vn_context(payload: Payload) -> dict:
-    eq1 = get_equipment_detail(payload, 0)
-    eq2 = get_equipment_detail(payload, 1)
-
-    all_icd = ", ".join([d.code for d in payload.diagnoses]) if payload.diagnoses else ""
+    vn_equipment_fields = build_vn_equipment_fields(payload)
 
     context = {
         "physician_name": payload.physician_name,
+        "practice_name": payload.practice_name or "",
         "practice_address": payload.practice_address,
         "practice_phone": payload.practice_phone,
         "practice_fax": payload.practice_fax,
@@ -171,15 +200,9 @@ def build_vn_context(payload: Payload) -> dict:
         "ambulatory_status": payload.ambulatory_status or "",
         "general_health_status": payload.general_health_status or "",
 
-        "equipment_1_name": eq1.name if eq1 else (payload.equipment_list[0] if len(payload.equipment_list) > 0 else ""),
-        "equipment_1_dx": eq1.dx if eq1 else all_icd,
-        "equipment_1_medical_necessity": eq1.medical_necessity if eq1 else "",
-
-        "equipment_2_name": eq2.name if eq2 else (payload.equipment_list[1] if len(payload.equipment_list) > 1 else ""),
-        "equipment_2_dx": eq2.dx if eq2 else all_icd,
-        "equipment_2_medical_necessity": eq2.medical_necessity if eq2 else "",
-
         "signature_date": payload.signature_date,
+
+        **vn_equipment_fields,
     }
 
     return context
