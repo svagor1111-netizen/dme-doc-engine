@@ -52,6 +52,7 @@ class Payload(BaseModel):
     practice_phone: str
     practice_fax: str
     practice_name: Optional[str] = ""
+    npi: Optional[str] = ""
 
     facility_name: str
     facility_address: str
@@ -209,7 +210,9 @@ def build_vn_context(payload: Payload) -> dict:
 
 
 def build_order_context(payload: Payload, order: OrderItem) -> dict:
-    diagnosis_text = ", ".join([f"{d.label} ({d.code})" for d in payload.diagnoses])
+    diagnosis_text = payload.primary_diagnosis or ", ".join(
+        [f"{d.label} ({d.code})" for d in payload.diagnoses]
+    )
     icd_codes = ", ".join(order.icd10)
 
     equipment_1 = order.items[0] if len(order.items) > 0 else ""
@@ -226,6 +229,8 @@ def build_order_context(payload: Payload, order: OrderItem) -> dict:
         "equipment_2_name": equipment_2,
         "diagnosis_text": diagnosis_text,
         "icd_codes": icd_codes,
+        "signature_date": payload.signature_date,
+        "npi": payload.npi or "",
     }
 
 
