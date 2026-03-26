@@ -15,6 +15,14 @@ TEMPLATES_DIR = "templates"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# Optional safe defaults from environment (set these in Render if needed)
+DEFAULT_PHYSICIAN_NAME = os.getenv("DEFAULT_PHYSICIAN_NAME", "")
+DEFAULT_PRACTICE_NAME = os.getenv("DEFAULT_PRACTICE_NAME", "")
+DEFAULT_PRACTICE_ADDRESS = os.getenv("DEFAULT_PRACTICE_ADDRESS", "")
+DEFAULT_PRACTICE_PHONE = os.getenv("DEFAULT_PRACTICE_PHONE", "")
+DEFAULT_PRACTICE_FAX = os.getenv("DEFAULT_PRACTICE_FAX", "")
+DEFAULT_NPI = os.getenv("DEFAULT_NPI", "")
+
 
 class Diagnosis(BaseModel):
     code: str
@@ -78,6 +86,25 @@ class Payload(BaseModel):
     equipment_details: Optional[List[EquipmentDetail]] = []
 
 
+def first_non_empty(*values: Optional[str]) -> str:
+    for value in values:
+        if value is not None:
+            s = str(value).strip()
+            if s:
+                return s
+    return ""
+
+
+def all_icd_codes(payload: Payload) -> str:
+    if not payload.diagnoses:
+        return ""
+    return ", ".join([d.code for d in payload.diagnoses if d.code])
+
+
+def normalized_signature_date(payload: Payload) -> str:
+    return first_non_empty(payload.signature_date, payload.exam_date)
+
+
 def validate_docx(path: str) -> None:
     if not os.path.exists(path):
         raise Exception(f"File not found: {path}")
@@ -109,8 +136,8 @@ def ensure_templates_exist() -> None:
 
 
 def default_primary_dx(payload: Payload) -> str:
-    if payload.primary_diagnosis:
-        return payload.primary_diagnosis
+    if payload.primary_diagnosis and payload.primary_diagnosis.strip():
+        return payload.primary_diagnosis.strip()
 
     if payload.diagnoses:
         d = payload.diagnoses[0]
@@ -120,8 +147,8 @@ def default_primary_dx(payload: Payload) -> str:
 
 
 def default_secondary_dx(payload: Payload) -> str:
-    if payload.secondary_diagnoses:
-        return payload.secondary_diagnoses
+    if payload.secondary_diagnoses and payload.secondary_diagnoses.strip():
+        return payload.secondary_diagnoses.strip()
 
     if len(payload.diagnoses) > 1:
         return "\n".join([f"{d.label} ({d.code})" for d in payload.diagnoses[1:]])
@@ -134,17 +161,19 @@ def build_vn_equipment_fields(payload: Payload) -> dict:
 
     equipment_details = payload.equipment_details or []
     equipment_list = payload.equipment_list or []
-    all_icd = ", ".join([d.code for d in payload.diagnoses]) if payload.diagnoses else ""
+    icd_string = all_icd_codes(payload)
 
-    for i in range(min(8, max(len(equipment_details), len(equipment_list)))):
+    total_items = min(8, max(len(equipment_details), len(equipment_list)))
+
+    for i in range(total_items):
         if i < len(equipment_details):
             item = equipment_details[i]
             name = item.name or ""
-            dx = item.dx or all_icd
+            dx = item.dx or icd_string
             medical_necessity = item.medical_necessity or ""
         else:
             name = equipment_list[i] if i < len(equipment_list) else ""
-            dx = all_icd
+            dx = icd_string
             medical_necessity = ""
 
         if name:
@@ -170,12 +199,12 @@ def build_vn_context(payload: Payload) -> dict:
     vn_equipment_fields = build_vn_equipment_fields(payload)
 
     context = {
-        "physician_name": payload.physician_name,
-        "practice_name": payload.practice_name or "",
-        "practice_address": payload.practice_address,
-        "practice_phone": payload.practice_phone,
-        "practice_fax": payload.practice_fax,
-        "exam_date": payload.exam_date,
+        "physician_name": first_non_empty(payload.physician_name, DEFAULT_PHYSICIAN_NAME),
+        "practice_name": first_non_empty(payload.practice_name, DEFAULT_PRACTICE_NAME),
+        "practice_address": first_non_empty(payload.practice_address, DEFAULT_PRACTICE_ADDRESS),
+        "practice_phone": first_non_empty(payload.practice_phone, DEFAULT_PRACTICE_PHONE),
+        "practice_fax": first_non_empty(payload.practice_fax, DEFAULT_PRACTICE_FAX),
+        "exam_date": first_non_empty(payload.exam_date, normalized_signature_date(payload)),
 
         "patient_name": payload.patient_name,
         "dob": payload.dob,
@@ -201,7 +230,7 @@ def build_vn_context(payload: Payload) -> dict:
         "ambulatory_status": payload.ambulatory_status or "",
         "general_health_status": payload.general_health_status or "",
 
-        "signature_date": payload.signature_date,
+        "signature_date": normalized_signature_date(payload),
 
         **vn_equipment_fields,
     }
@@ -213,24 +242,25 @@ def build_order_context(payload: Payload, order: OrderItem) -> dict:
     diagnosis_text = payload.primary_diagnosis or ", ".join(
         [f"{d.label} ({d.code})" for d in payload.diagnoses]
     )
-    icd_codes = ", ".join(order.icd10)
+
+    icd_codes = ", ".join(order.icd10) if order.icd10 else all_icd_codes(payload)
 
     equipment_1 = order.items[0] if len(order.items) > 0 else ""
     equipment_2 = order.items[1] if len(order.items) > 1 else ""
 
     return {
-        "physician_name": payload.physician_name,
-        "practice_name": payload.practice_name or "",
-        "practice_address": payload.practice_address,
-        "practice_phone": payload.practice_phone,
-        "practice_fax": payload.practice_fax,
+        "physician_name": first_non_empty(payload.physician_name, DEFAULT_PHYSICIAN_NAME),
+        "practice_name": first_non_empty(payload.practice_name, DEFAULT_PRACTICE_NAME),
+        "practice_address": first_non_empty(payload.practice_address, DEFAULT_PRACTICE_ADDRESS),
+        "practice_phone": first_non_empty(payload.practice_phone, DEFAULT_PRACTICE_PHONE),
+        "practice_fax": first_non_empty(payload.practice_fax, DEFAULT_PRACTICE_FAX),
         "patient_name": payload.patient_name,
         "equipment_1_name": equipment_1,
         "equipment_2_name": equipment_2,
         "diagnosis_text": diagnosis_text,
         "icd_codes": icd_codes,
-        "signature_date": payload.signature_date,
-        "npi": payload.npi or "",
+        "signature_date": normalized_signature_date(payload),
+        "npi": first_non_empty(payload.npi, DEFAULT_NPI),
     }
 
 
@@ -251,7 +281,7 @@ def generate_vn(payload: Payload) -> str:
 
 
 def split_orders_if_needed(payload: Payload) -> List[OrderItem]:
-    fixed_orders = []
+    fixed_orders: List[OrderItem] = []
 
     for order in payload.orders:
         items = order.items or []
@@ -273,7 +303,7 @@ def split_orders_if_needed(payload: Payload) -> List[OrderItem]:
 
 def generate_orders(payload: Payload) -> List[str]:
     template_path = os.path.join(TEMPLATES_DIR, "MASTER_ORDER.docx")
-    files = []
+    files: List[str] = []
 
     normalized_orders = split_orders_if_needed(payload)
 
