@@ -201,7 +201,11 @@ def build_vn_context(payload: Payload) -> dict:
     context = {
         "physician_name": first_non_empty(payload.physician_name, DEFAULT_PHYSICIAN_NAME),
         "practice_name": first_non_empty(payload.practice_name, DEFAULT_PRACTICE_NAME),
-        "practice_address": first_non_empty(payload.practice_address, DEFAULT_PRACTICE_ADDRESS),
+        "practice_address": first_non_empty(
+            payload.practice_address,
+            DEFAULT_PRACTICE_ADDRESS,
+            "20301 Ventura Blvd #210, Woodland Hills, CA 91364"
+        ),
         "practice_phone": first_non_empty(payload.practice_phone, DEFAULT_PRACTICE_PHONE),
         "practice_fax": first_non_empty(payload.practice_fax, DEFAULT_PRACTICE_FAX),
         "exam_date": first_non_empty(payload.exam_date, normalized_signature_date(payload)),
@@ -251,7 +255,11 @@ def build_order_context(payload: Payload, order: OrderItem) -> dict:
     return {
         "physician_name": first_non_empty(payload.physician_name, DEFAULT_PHYSICIAN_NAME),
         "practice_name": first_non_empty(payload.practice_name, DEFAULT_PRACTICE_NAME),
-        "practice_address": first_non_empty(payload.practice_address, DEFAULT_PRACTICE_ADDRESS),
+        "practice_address": first_non_empty(
+            payload.practice_address,
+            DEFAULT_PRACTICE_ADDRESS,
+            "20301 Ventura Blvd #210, Woodland Hills, CA 91364"
+        ),
         "practice_phone": first_non_empty(payload.practice_phone, DEFAULT_PRACTICE_PHONE),
         "practice_fax": first_non_empty(payload.practice_fax, DEFAULT_PRACTICE_FAX),
         "patient_name": payload.patient_name,
@@ -260,7 +268,7 @@ def build_order_context(payload: Payload, order: OrderItem) -> dict:
         "diagnosis_text": diagnosis_text,
         "icd_codes": icd_codes,
         "signature_date": normalized_signature_date(payload),
-        "npi": first_non_empty(payload.npi, DEFAULT_NPI),
+        "npi": first_non_empty(payload.npi, DEFAULT_NPI, "1295174860"),
     }
 
 
