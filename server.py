@@ -85,6 +85,10 @@ class Payload(BaseModel):
 
     equipment_details: Optional[List[EquipmentDetail]] = []
 
+    # vnm = VN + standard orders
+    # vnmi = VN + incontinence form
+    mode: Optional[str] = "vnm"
+
 
 def first_non_empty(*values: Optional[str]) -> str:
     for value in values:
@@ -127,12 +131,16 @@ def validate_docx(path: str) -> None:
 def ensure_templates_exist() -> None:
     vn_template = os.path.join(TEMPLATES_DIR, "MASTER_VN.docx")
     order_template = os.path.join(TEMPLATES_DIR, "MASTER_ORDER.docx")
+    inc_template = os.path.join(TEMPLATES_DIR, "MASTER_INCONTINENCE.docx")
 
     if not os.path.exists(vn_template):
         raise Exception("Missing template: templates/MASTER_VN.docx")
 
     if not os.path.exists(order_template):
         raise Exception("Missing template: templates/MASTER_ORDER.docx")
+
+    if not os.path.exists(inc_template):
+        raise Exception("Missing template: templates/MASTER_INCONTINENCE.docx")
 
 
 def default_primary_dx(payload: Payload) -> str:
@@ -272,6 +280,54 @@ def build_order_context(payload: Payload, order: OrderItem) -> dict:
     }
 
 
+def build_incontinence_context(payload: Payload) -> dict:
+    primary_icd = payload.diagnoses[0].code if payload.diagnoses else ""
+    secondary_icd = ", ".join([d.code for d in payload.diagnoses[1:]]) if len(payload.diagnoses) > 1 else ""
+
+    full_address = first_non_empty(
+        payload.practice_address,
+        DEFAULT_PRACTICE_ADDRESS,
+        "20301 Ventura Blvd #210, Woodland Hills, CA 91364"
+    )
+
+    city = ""
+    state = ""
+    zip_code = ""
+
+    # naive parse for "Street, City, ST ZIP"
+    parts = [p.strip() for p in full_address.split(",")]
+    if len(parts) >= 3:
+        city = parts[-2]
+        state_zip = parts[-1].split()
+        if len(state_zip) >= 2:
+            state = state_zip[0]
+            zip_code = state_zip[1]
+
+    return {
+        "patient_name": payload.patient_name,
+        "dob": payload.dob,
+        "height": payload.vitals.height,
+        "weight": payload.vitals.weight,
+
+        # codes only
+        "primary_icd": primary_icd,
+        "secondary_icd": secondary_icd,
+
+        # physician
+        "physician_name": first_non_empty(payload.physician_name, DEFAULT_PHYSICIAN_NAME),
+        "practice_address": full_address,
+        "practice_phone": first_non_empty(payload.practice_phone, DEFAULT_PRACTICE_PHONE),
+        "practice_fax": first_non_empty(payload.practice_fax, DEFAULT_PRACTICE_FAX),
+        "npi": first_non_empty(payload.npi, DEFAULT_NPI, "1295174860"),
+
+        "city": city,
+        "state": state,
+        "zip": zip_code,
+
+        "signature_date": normalized_signature_date(payload),
+    }
+
+
 def generate_vn(payload: Payload) -> str:
     template_path = os.path.join(TEMPLATES_DIR, "MASTER_VN.docx")
     template = DocxTemplate(template_path)
@@ -331,6 +387,22 @@ def generate_orders(payload: Payload) -> List[str]:
     return files
 
 
+def generate_incontinence(payload: Payload) -> str:
+    template_path = os.path.join(TEMPLATES_DIR, "MASTER_INCONTINENCE.docx")
+    template = DocxTemplate(template_path)
+
+    context = build_incontinence_context(payload)
+
+    filename = f"INCONT_{uuid.uuid4().hex}.docx"
+    path = os.path.join(OUTPUT_DIR, filename)
+
+    template.render(context)
+    template.save(path)
+    validate_docx(path)
+
+    return filename
+
+
 @app.get("/")
 def root():
     return {"ok": True, "service": "dme-doc-engine"}
@@ -346,10 +418,22 @@ def create_dme_documents(payload: Payload):
     try:
         ensure_templates_exist()
 
+        vn_file = generate_vn(payload)
+
+        if payload.mode == "vnmi":
+            inc_file = generate_incontinence(payload)
+
+            return {
+                "vn_docx_url": f"{BASE_URL}/files/{vn_file}",
+                "incontinence_docx_url": f"{BASE_URL}/files/{inc_file}",
+                "success": True,
+                "partial_failure": False,
+                "message": "VN + Incontinence generated"
+            }
+
         if not payload.orders:
             raise HTTPException(status_code=400, detail="orders are missing")
 
-        vn_file = generate_vn(payload)
         order_files = generate_orders(payload)
 
         return {
@@ -357,7 +441,7 @@ def create_dme_documents(payload: Payload):
             "order_docx_urls": [f"{BASE_URL}/files/{f}" for f in order_files],
             "success": True,
             "partial_failure": False,
-            "message": "Documents generated"
+            "message": "VN + Orders generated"
         }
 
     except HTTPException:
@@ -366,6 +450,7 @@ def create_dme_documents(payload: Payload):
         return {
             "vn_docx_url": "",
             "order_docx_urls": [],
+            "incontinence_docx_url": "",
             "success": False,
             "partial_failure": False,
             "message": str(e)
