@@ -15,7 +15,6 @@ TEMPLATES_DIR = "templates"
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Optional safe defaults from environment (set these in Render if needed)
 DEFAULT_PHYSICIAN_NAME = os.getenv("DEFAULT_PHYSICIAN_NAME", "")
 DEFAULT_PRACTICE_NAME = os.getenv("DEFAULT_PRACTICE_NAME", "")
 DEFAULT_PRACTICE_ADDRESS = os.getenv("DEFAULT_PRACTICE_ADDRESS", "")
@@ -74,7 +73,7 @@ class Payload(BaseModel):
     equipment_list: List[str]
 
     vn_text: Optional[str] = ""
-    orders: List[OrderItem]
+    orders: Optional[List[OrderItem]] = []  # ✅ FIXED HERE
 
     primary_diagnosis: Optional[str] = ""
     secondary_diagnoses: Optional[str] = ""
@@ -85,8 +84,6 @@ class Payload(BaseModel):
 
     equipment_details: Optional[List[EquipmentDetail]] = []
 
-    # vnm = VN + standard orders
-    # vnmi = VN + incontinence form
     mode: Optional[str] = "vnm"
 
 
@@ -294,7 +291,6 @@ def build_incontinence_context(payload: Payload) -> dict:
     state = ""
     zip_code = ""
 
-    # naive parse for "Street, City, ST ZIP"
     parts = [p.strip() for p in full_address.split(",")]
     if len(parts) >= 3:
         city = parts[-2]
@@ -308,22 +304,16 @@ def build_incontinence_context(payload: Payload) -> dict:
         "dob": payload.dob,
         "height": payload.vitals.height,
         "weight": payload.vitals.weight,
-
-        # codes only
         "primary_icd": primary_icd,
         "secondary_icd": secondary_icd,
-
-        # physician
         "physician_name": first_non_empty(payload.physician_name, DEFAULT_PHYSICIAN_NAME),
         "practice_address": full_address,
         "practice_phone": first_non_empty(payload.practice_phone, DEFAULT_PRACTICE_PHONE),
         "practice_fax": first_non_empty(payload.practice_fax, DEFAULT_PRACTICE_FAX),
         "npi": first_non_empty(payload.npi, DEFAULT_NPI, "1295174860"),
-
         "city": city,
         "state": state,
         "zip": zip_code,
-
         "signature_date": normalized_signature_date(payload),
     }
 
@@ -347,7 +337,7 @@ def generate_vn(payload: Payload) -> str:
 def split_orders_if_needed(payload: Payload) -> List[OrderItem]:
     fixed_orders: List[OrderItem] = []
 
-    for order in payload.orders:
+    for order in payload.orders or []:
         items = order.items or []
         icd10 = order.icd10 or []
 
