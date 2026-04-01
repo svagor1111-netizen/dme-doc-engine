@@ -73,7 +73,7 @@ class Payload(BaseModel):
     equipment_list: List[str]
 
     vn_text: Optional[str] = ""
-    orders: Optional[List[OrderItem]] = []  # ✅ FIXED HERE
+    orders: Optional[List[OrderItem]] = []
 
     primary_diagnosis: Optional[str] = ""
     secondary_diagnoses: Optional[str] = ""
@@ -383,7 +383,7 @@ def generate_incontinence(payload: Payload) -> str:
 
     context = build_incontinence_context(payload)
 
-    filename = f"INCONT_{uuid.uuid4().hex}.docx"
+    filename = f"ORDER_{uuid.uuid4().hex}.docx"
     path = os.path.join(OUTPUT_DIR, filename)
 
     template.render(context)
@@ -415,10 +415,10 @@ def create_dme_documents(payload: Payload):
 
             return {
                 "vn_docx_url": f"{BASE_URL}/files/{vn_file}",
-                "incontinence_docx_url": f"{BASE_URL}/files/{inc_file}",
+                "order_docx_urls": [f"{BASE_URL}/files/{inc_file}"],
                 "success": True,
                 "partial_failure": False,
-                "message": "VN + Incontinence generated"
+                "message": "VN + Orders generated"
             }
 
         if not payload.orders:
@@ -440,7 +440,6 @@ def create_dme_documents(payload: Payload):
         return {
             "vn_docx_url": "",
             "order_docx_urls": [],
-            "incontinence_docx_url": "",
             "success": False,
             "partial_failure": False,
             "message": str(e)
