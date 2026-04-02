@@ -22,6 +22,17 @@ DEFAULT_PRACTICE_PHONE = os.getenv("DEFAULT_PRACTICE_PHONE", "")
 DEFAULT_PRACTICE_FAX = os.getenv("DEFAULT_PRACTICE_FAX", "")
 DEFAULT_NPI = os.getenv("DEFAULT_NPI", "")
 
+# Blocked in the main VNM generator
+BLOCKED_EQUIPMENT_TERMS = {
+    "underpads",
+    "under pads",
+    "under pad",
+    "underpads / chux",
+    "under pads / chux",
+    "chux",
+    "chucks",
+}
+
 
 class Diagnosis(BaseModel):
     code: str
@@ -96,6 +107,22 @@ def first_non_empty(*values: Optional[str]) -> str:
     return ""
 
 
+def normalize_equipment_name(name: str) -> str:
+    return " ".join((name or "").strip().lower().replace("-", " ").replace("/", " / ").split())
+
+
+def is_blocked_equipment(name: str) -> bool:
+    normalized = normalize_equipment_name(name)
+    if normalized in BLOCKED_EQUIPMENT_TERMS:
+        return True
+
+    # broader safe catch for common variants
+    if "underpad" in normalized or normalized == "chux" or " / chux" in normalized:
+        return True
+
+    return False
+
+
 def all_icd_codes(payload: Payload) -> str:
     if not payload.diagnoses:
         return ""
@@ -140,30 +167,54 @@ def ensure_templates_exist() -> None:
         raise Exception("Missing template: templates/MASTER_INCONTINENCE.docx")
 
 
+def ensure_code_first(text: str, code_prefix: str) -> str:
+    clean_text = (text or "").strip()
+    clean_code = (code_prefix or "").strip()
+
+    if not clean_text:
+        return ""
+
+    if not clean_code:
+        return clean_text
+
+    if clean_text.startswith(clean_code):
+        return clean_text
+
+    return f"{clean_code} – {clean_text}"
+
+
 def default_primary_dx(payload: Payload) -> str:
+    primary_code = payload.diagnoses[0].code if payload.diagnoses else ""
+
     if payload.primary_diagnosis and payload.primary_diagnosis.strip():
-        return payload.primary_diagnosis.strip()
+        return ensure_code_first(payload.primary_diagnosis.strip(), primary_code)
 
     if payload.diagnoses:
         d = payload.diagnoses[0]
-        return f"{d.label} ({d.code})"
+        return f"{d.code} – {d.label}"
 
     return ""
 
 
 def default_secondary_dx(payload: Payload) -> str:
+    secondary_codes = [d.code for d in payload.diagnoses[1:] if d.code]
+
     if payload.secondary_diagnoses and payload.secondary_diagnoses.strip():
-        return payload.secondary_diagnoses.strip()
+        code_prefix = ", ".join(secondary_codes)
+        return ensure_code_first(payload.secondary_diagnoses.strip(), code_prefix)
 
     if len(payload.diagnoses) > 1:
-        return "\n".join([f"{d.label} ({d.code})" for d in payload.diagnoses[1:]])
+        return "\n".join([f"{d.code} – {d.label}" for d in payload.diagnoses[1:]])
 
     return ""
 
 
-def build_vn_equipment_fields(payload: Payload) -> dict:
-    fields = [""] * 8
-
+def filtered_equipment_entries(payload: Payload) -> List[tuple[str, str, str]]:
+    """
+    Produces effective VN equipment entries while removing blocked items.
+    Keeps existing behavior: prefer equipment_details, fall back to equipment_list.
+    """
+    entries: List[tuple[str, str, str]] = []
     equipment_details = payload.equipment_details or []
     equipment_list = payload.equipment_list or []
     icd_string = all_icd_codes(payload)
@@ -173,20 +224,38 @@ def build_vn_equipment_fields(payload: Payload) -> dict:
     for i in range(total_items):
         if i < len(equipment_details):
             item = equipment_details[i]
-            name = item.name or ""
-            dx = item.dx or icd_string
-            medical_necessity = item.medical_necessity or ""
+            name = (item.name or "").strip()
+            dx = (item.dx or icd_string).strip()
+            medical_necessity = (item.medical_necessity or "").strip()
         else:
-            name = equipment_list[i] if i < len(equipment_list) else ""
+            name = (equipment_list[i] if i < len(equipment_list) else "").strip()
             dx = icd_string
             medical_necessity = ""
 
-        if name:
-            fields[i] = (
-                f"{i + 1}. {name}\n"
-                f"Relevant Dx/ICD-10: {dx}\n"
-                f"Medical Necessity: {medical_necessity}"
-            )
+        if not name:
+            continue
+
+        if is_blocked_equipment(name):
+            continue
+
+        entries.append((name, dx, medical_necessity))
+
+        if len(entries) >= 8:
+            break
+
+    return entries
+
+
+def build_vn_equipment_fields(payload: Payload) -> dict:
+    fields = [""] * 8
+    entries = filtered_equipment_entries(payload)
+
+    for idx, (name, dx, medical_necessity) in enumerate(entries):
+        fields[idx] = (
+            f"{idx + 1}. {name}\n"
+            f"Relevant Dx/ICD-10: {dx}\n"
+            f"Medical Necessity: {medical_necessity}"
+        )
 
     return {
         "equipment_1": fields[0],
@@ -249,7 +318,7 @@ def build_vn_context(payload: Payload) -> dict:
 
 def build_order_context(payload: Payload, order: OrderItem) -> dict:
     diagnosis_text = payload.primary_diagnosis or ", ".join(
-        [f"{d.label} ({d.code})" for d in payload.diagnoses]
+        [f"{d.code} – {d.label}" for d in payload.diagnoses]
     )
 
     icd_codes = ", ".join(order.icd10) if order.icd10 else all_icd_codes(payload)
@@ -338,19 +407,22 @@ def split_orders_if_needed(payload: Payload) -> List[OrderItem]:
     fixed_orders: List[OrderItem] = []
 
     for order in payload.orders or []:
-        items = order.items or []
+        filtered_items = [
+            item for item in (order.items or [])
+            if item and not is_blocked_equipment(item)
+        ]
         icd10 = order.icd10 or []
 
-        if len(items) <= 2:
-            fixed_orders.append(order)
+        if not filtered_items:
+            continue
+
+        if len(filtered_items) <= 2:
+            fixed_orders.append(OrderItem(items=filtered_items, icd10=icd10))
         else:
-            for i in range(0, len(items), 2):
-                fixed_orders.append(
-                    OrderItem(
-                        items=items[i:i + 2],
-                        icd10=icd10
-                    )
-                )
+            for i in range(0, len(filtered_items), 2):
+                chunk = filtered_items[i:i + 2]
+                if chunk:
+                    fixed_orders.append(OrderItem(items=chunk, icd10=icd10))
 
     return fixed_orders
 
