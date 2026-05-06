@@ -95,17 +95,6 @@ class Payload(BaseModel):
 
     equipment_details: Optional[List[EquipmentDetail]] = []
 
-    # Raw VN equipment blocks sent by GPT.
-    # These match MASTER_VN.docx placeholders directly and must be preserved.
-    equipment_1: Optional[str] = ""
-    equipment_2: Optional[str] = ""
-    equipment_3: Optional[str] = ""
-    equipment_4: Optional[str] = ""
-    equipment_5: Optional[str] = ""
-    equipment_6: Optional[str] = ""
-    equipment_7: Optional[str] = ""
-    equipment_8: Optional[str] = ""
-
     mode: Optional[str] = "vnm"
 
 
@@ -208,16 +197,14 @@ def default_primary_dx(payload: Payload) -> str:
 
 
 def default_secondary_dx(payload: Payload) -> str:
-    # IMPORTANT:
-    # Do NOT prepend a comma-separated ICD prefix here.
-    # The old code created: "I11.9, B20, R56.9 – I11.9 ..."
-    # That broke the VN secondary diagnosis format.
+    secondary_codes = [d.code for d in payload.diagnoses[1:] if d.code]
+
     if payload.secondary_diagnoses and payload.secondary_diagnoses.strip():
-        return payload.secondary_diagnoses.strip()
+        code_prefix = ", ".join(secondary_codes)
+        return ensure_code_first(payload.secondary_diagnoses.strip(), code_prefix)
 
     if len(payload.diagnoses) > 1:
-        return "
-".join([f"{d.code} – {d.label}" for d in payload.diagnoses[1:]])
+        return "\n".join([f"{d.code} – {d.label}" for d in payload.diagnoses[1:]])
 
     return ""
 
@@ -261,53 +248,14 @@ def filtered_equipment_entries(payload: Payload) -> List[tuple[str, str, str]]:
 
 def build_vn_equipment_fields(payload: Payload) -> dict:
     fields = [""] * 8
+    entries = filtered_equipment_entries(payload)
 
-    # First priority: raw equipment_1..equipment_8 blocks from GPT.
-    # These already contain:
-    # 1. Equipment
-    # Relevant Dx/ICD-10
-    # Medical Necessity
-    # We must preserve them exactly so Medical Necessity is not erased.
-    raw_fields = [
-        payload.equipment_1,
-        payload.equipment_2,
-        payload.equipment_3,
-        payload.equipment_4,
-        payload.equipment_5,
-        payload.equipment_6,
-        payload.equipment_7,
-        payload.equipment_8,
-    ]
-
-    has_raw_fields = any((value or "").strip() for value in raw_fields)
-
-    if has_raw_fields:
-        for idx, value in enumerate(raw_fields):
-            text = (value or "").strip()
-            if not text:
-                continue
-
-            # Skip blocked supply items if they appear in the raw block heading.
-            first_line = text.splitlines()[0] if text.splitlines() else text
-            if is_blocked_equipment(first_line):
-                continue
-
-            fields[idx] = text
-
-    else:
-        # Backward-compatible fallback:
-        # use equipment_details when provided; otherwise use equipment_list.
-        # equipment_list alone has no Medical Necessity, so the output may be brief.
-        entries = filtered_equipment_entries(payload)
-
-        for idx, (name, dx, medical_necessity) in enumerate(entries):
-            fields[idx] = (
-                f"{idx + 1}. {name}
-"
-                f"Relevant Dx/ICD-10: {dx}
-"
-                f"Medical Necessity: {medical_necessity}"
-            )
+    for idx, (name, dx, medical_necessity) in enumerate(entries):
+        fields[idx] = (
+            f"{idx + 1}. {name}\n"
+            f"Relevant Dx/ICD-10: {dx}\n"
+            f"Medical Necessity: {medical_necessity}"
+        )
 
     return {
         "equipment_1": fields[0],
@@ -329,7 +277,8 @@ def build_vn_context(payload: Payload) -> dict:
         "practice_name": first_non_empty(payload.practice_name, DEFAULT_PRACTICE_NAME),
         "practice_address": first_non_empty(
             payload.practice_address,
-            DEFAULT_PRACTICE_ADDRESS
+            DEFAULT_PRACTICE_ADDRESS,
+            "20301 Ventura Blvd #210, Woodland Hills, CA 91364"
         ),
         "practice_phone": first_non_empty(payload.practice_phone, DEFAULT_PRACTICE_PHONE),
         "practice_fax": first_non_empty(payload.practice_fax, DEFAULT_PRACTICE_FAX),
@@ -382,7 +331,8 @@ def build_order_context(payload: Payload, order: OrderItem) -> dict:
         "practice_name": first_non_empty(payload.practice_name, DEFAULT_PRACTICE_NAME),
         "practice_address": first_non_empty(
             payload.practice_address,
-            DEFAULT_PRACTICE_ADDRESS
+            DEFAULT_PRACTICE_ADDRESS,
+            "20301 Ventura Blvd #210, Woodland Hills, CA 91364"
         ),
         "practice_phone": first_non_empty(payload.practice_phone, DEFAULT_PRACTICE_PHONE),
         "practice_fax": first_non_empty(payload.practice_fax, DEFAULT_PRACTICE_FAX),
@@ -402,7 +352,8 @@ def build_incontinence_context(payload: Payload) -> dict:
 
     full_address = first_non_empty(
         payload.practice_address,
-        DEFAULT_PRACTICE_ADDRESS
+        DEFAULT_PRACTICE_ADDRESS,
+        "20301 Ventura Blvd #210, Woodland Hills, CA 91364"
     )
 
     city = ""
